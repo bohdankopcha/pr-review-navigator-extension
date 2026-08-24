@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "PR Review Navigator",
+  "version": "0.1.0",
+  "description": "Cmd+Click to toggle a file as reviewed, Cmd+Ctrl+Click to collapse/expand it — for faster GitHub PR review.",
+  "content_scripts": [
+    {
+      "matches": ["https://github.com/*/*/pull/*"],
+      "js": ["content.js"],
+      "css": ["styles.css"],
+      "run_at": "document_idle"
+    }
+  ]
+}
