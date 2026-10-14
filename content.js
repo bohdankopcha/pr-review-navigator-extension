@@ -1,19 +1,25 @@
 // PR Review Navigator
-// Hold Cmd (Mac) / Ctrl (Windows/Linux) -> gray overlay appears over each diff block.
+// Hold Cmd (Mac) / Ctrl (Windows/Linux) -> diff blocks get outlined, the one
+// under the cursor gets a clickable overlay.
 // Click overlay        -> toggle "Viewed"
 // Click overlay + Alt  -> toggle collapse/expand
 //
 // Supports two GitHub PR UIs:
 //  - "new" (.../pull/N/changes): React-based, diff blocks are
-//    div[class*="diffEntry"], Viewed is a <button>.
+//    div[class*="diffEntry"], Viewed is a <button aria-pressed> labelled
+//    "Viewed" / "Not Viewed".
 //  - "old" (.../pull/N/files): Rails-rendered, diff blocks are
 //    [data-tagsearch-path], Viewed is a hidden
 //    <input type=checkbox class=js-reviewed-checkbox>.
+//
+// Performance: no MutationObserver and no per-block DOM work. Only ONE overlay
+// element exists; it is moved into whichever block is under the cursor. The
+// "all blocks" highlight is pure CSS keyed off a body class.
 
 (function () {
   'use strict';
 
-  const DEBUG = true;
+  const DEBUG = false;
   function log(...args) {
     if (DEBUG) console.log('[PRN]', ...args);
   }
@@ -29,7 +35,6 @@
     return isMac ? e.metaKey : e.ctrlKey;
   }
   document.body.classList.add(isMac ? 'prn-mac' : 'prn-win');
-  log('platform:', isMac ? 'mac (Cmd)' : 'win/linux (Ctrl)');
 
   // ---------- label resolution (Primer IconButtons use aria-labelledby) ----------
 
@@ -50,20 +55,22 @@
 
   // ---------- diff block discovery (new + old UI) ----------
 
-  function allDiffBlocks() {
-    const newBlocks = [...document.querySelectorAll('div[class*="diffEntry"]')];
-    const oldBlocks = [...document.querySelectorAll('[data-tagsearch-path]')];
-    return newBlocks.length ? newBlocks : oldBlocks;
+  const BLOCK_SELECTOR = 'div[class*="diffEntry"], [data-tagsearch-path]';
+
+  function blockFrom(node) {
+    return node && node.closest ? node.closest(BLOCK_SELECTOR) : null;
   }
 
   function findViewedControl(block) {
-    // new UI
-    let el = block.querySelector('button[class*="MarkAsViewedButton"]');
-    if (el) return el;
+    // new UI: <button aria-pressed aria-label="Viewed|Not Viewed">
+    const btn = [...block.querySelectorAll('button[aria-pressed]')].find((b) =>
+      /^(not )?viewed$/i.test((b.getAttribute('aria-label') || '').trim())
+    );
+    if (btn) return btn;
     // old UI
     const header = block.querySelector('.file-header');
     if (!header) return null;
-    el = header.querySelector('input.js-reviewed-checkbox');
+    let el = header.querySelector('input.js-reviewed-checkbox');
     if (el) return el;
     const label = [...header.querySelectorAll('label')].find((l) => /viewed/i.test(l.textContent));
     if (label) {
@@ -88,123 +95,98 @@
   // ---------- actions ----------
 
   function flash(block) {
-    if (!block) return;
     block.classList.add('prn-flash');
     setTimeout(() => block.classList.remove('prn-flash'), 350);
   }
 
   function toggleReviewed(block) {
-    if (!block) return;
     const control = findViewedControl(block);
-    if (control) {
-      control.click();
-    } else {
-      block.classList.toggle('prn-marked-reviewed');
-    }
+    log('toggle viewed', control);
+    if (control) control.click();
+    else block.classList.toggle('prn-marked-reviewed');
     flash(block);
   }
 
   function toggleCollapse(block) {
-    if (!block) return;
     const btn = findCollapseControl(block);
+    log('toggle collapse', btn);
     if (btn) btn.click();
     flash(block);
   }
 
-  function handleToggle(block, altHeld) {
-    if (altHeld) toggleCollapse(block);
-    else toggleReviewed(block);
-  }
+  // ---------- overlay (single element, moved to the hovered block) ----------
 
-  // ---------- overlay management ----------
+  const overlay = document.createElement('div');
+  overlay.className = 'prn-overlay';
+  const tag = document.createElement('span');
+  tag.className = 'prn-overlay-tag';
+  overlay.appendChild(tag);
 
-  let overlaysActive = false;
+  let active = false;
   let altActive = false;
-  let mo = null;
+  let lastTarget = null; // last element under the cursor
+  let currentBlock = null;
 
-  // Single delegated listener instead of one per overlay: React sometimes
-  // replaces a block's DOM node (re-render), which would silently detach a
-  // listener bound directly to that node. Delegating to document and
-  // resolving the target fresh at click-time is immune to that.
-  document.addEventListener(
-    'click',
-    function (e) {
-      const overlay = e.target.closest && e.target.closest('.prn-overlay');
-      if (!overlay) return;
-      e.preventDefault();
-      e.stopPropagation();
-      e.stopImmediatePropagation();
-
-      const target = overlay.parentElement;
-      log('overlay click', target && (target.id || target.className));
-      if (!target) return;
-
-      handleToggle(target, e.altKey);
-    },
-    true
-  );
-
-  function makeOverlay(target) {
-    if (target.querySelector(':scope > .prn-overlay')) return;
-    if (getComputedStyle(target).position === 'static') {
-      target.classList.add('prn-relative');
+  function placeOverlay() {
+    const block = blockFrom(lastTarget);
+    if (block === currentBlock && overlay.parentElement === block) return;
+    currentBlock = block;
+    if (!block) {
+      overlay.remove();
+      return;
     }
-    const overlay = document.createElement('div');
-    overlay.className = 'prn-overlay';
-
-    const tag = document.createElement('span');
-    tag.className = 'prn-overlay-tag';
-    overlay.appendChild(tag);
-
-    target.appendChild(overlay);
+    if (getComputedStyle(block).position === 'static') block.classList.add('prn-relative');
+    block.appendChild(overlay);
   }
 
-  function addOverlays() {
-    const blocks = allDiffBlocks();
-    blocks.forEach((el) => makeOverlay(el));
-    log('overlays added:', blocks.length, 'diff blocks');
-  }
-
-  function removeOverlays() {
-    document.querySelectorAll('.prn-overlay').forEach((el) => el.remove());
-  }
-
-  function activateOverlays() {
-    if (overlaysActive) return;
-    overlaysActive = true;
-    log('overlays ON');
-    addOverlays();
+  function activate() {
+    if (active) return;
+    active = true;
     document.body.classList.add('prn-cmd-active');
-    mo = new MutationObserver(() => addOverlays());
-    mo.observe(document.body, { childList: true, subtree: true });
+    placeOverlay();
+    log('ON');
   }
 
-  function deactivateOverlays() {
-    if (!overlaysActive) return;
-    overlaysActive = false;
-    log('overlays OFF');
-    if (mo) {
-      mo.disconnect();
-      mo = null;
-    }
-    removeOverlays();
+  function deactivate() {
+    if (!active) return;
+    active = false;
+    currentBlock = null;
+    overlay.remove();
     document.body.classList.remove('prn-cmd-active');
+    setAlt(false);
+    log('OFF');
   }
 
-  function updateAltMode(isAlt) {
+  function setAlt(isAlt) {
     if (altActive === isAlt) return;
     altActive = isAlt;
     document.body.classList.toggle('prn-alt-active', isAlt);
   }
 
+  // Delegated, capture-phase: resolve the block fresh at click time so React
+  // re-renders replacing nodes can't break anything.
+  document.addEventListener(
+    'click',
+    function (e) {
+      if (e.target !== overlay && !overlay.contains(e.target)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      const block = overlay.parentElement;
+      if (!block) return;
+      if (e.altKey) toggleCollapse(block);
+      else toggleReviewed(block);
+    },
+    true
+  );
+
   document.addEventListener(
     'keydown',
     function (e) {
       if (e.key === PRIMARY_KEY || primaryHeld(e)) {
-        activateOverlays();
-        updateAltMode(e.altKey);
+        activate();
+        setAlt(e.altKey);
       }
-      if (e.key === 'Alt' && overlaysActive) updateAltMode(true);
     },
     true
   );
@@ -212,25 +194,37 @@
   document.addEventListener(
     'keyup',
     function (e) {
-      if (e.key === PRIMARY_KEY || !primaryHeld(e)) deactivateOverlays();
-      if (e.key === 'Alt') updateAltMode(false);
+      if (e.key === PRIMARY_KEY || !primaryHeld(e)) deactivate();
+      else if (e.key === 'Alt') setAlt(false);
     },
     true
   );
 
+  // Cheap: only does work when the element under the cursor changes.
   document.addEventListener(
     'mousemove',
     function (e) {
-      if (primaryHeld(e) && !overlaysActive) activateOverlays();
-      if (!primaryHeld(e) && overlaysActive) deactivateOverlays();
-      if (overlaysActive) updateAltMode(e.altKey);
+      const held = primaryHeld(e);
+      if (!held) {
+        lastTarget = e.target;
+        if (active) deactivate();
+        return;
+      }
+      if (!active) {
+        lastTarget = e.target;
+        activate();
+      } else if (e.target !== lastTarget && e.target !== overlay && !overlay.contains(e.target)) {
+        lastTarget = e.target;
+        placeOverlay();
+      }
+      setAlt(e.altKey);
     },
-    true
+    { capture: true, passive: true }
   );
 
-  window.addEventListener('blur', deactivateOverlays);
+  window.addEventListener('blur', deactivate);
   document.addEventListener('visibilitychange', function () {
-    if (document.hidden) deactivateOverlays();
+    if (document.hidden) deactivate();
   });
 
   // ---------- one-time hint ----------
@@ -243,9 +237,9 @@
     hint.className = 'prn-hint';
     hint.innerHTML =
       '<strong>PR Review Navigator</strong><br>' +
-      `Hold ${primaryLabel} — gray overlay appears on diff blocks<br>` +
-      'Click overlay — toggle Viewed<br>' +
-      `Click overlay + ${altLabel} — collapse/expand`;
+      `Hold ${primaryLabel} — hover a diff block<br>` +
+      'Click — toggle Viewed<br>' +
+      `Click + ${altLabel} — collapse/expand`;
     document.body.appendChild(hint);
     localStorage.setItem(HINT_KEY, '1');
     setTimeout(() => hint.classList.add('prn-hint--hide'), 7000);

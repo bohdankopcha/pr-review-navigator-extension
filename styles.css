@@ -4,26 +4,28 @@
   position: relative !important;
 }
 
+/* While Cmd/Ctrl is held: cheap outline on every diff block (no extra DOM) */
+body.prn-cmd-active div[class*="diffEntry"],
+body.prn-cmd-active [data-tagsearch-path] {
+  outline: 1px solid rgba(110, 118, 129, 0.25);
+  outline-offset: -1px;
+  border-radius: 6px;
+}
+
+/* Single overlay, lives inside the block under the cursor */
 .prn-overlay {
   position: absolute;
   inset: 0;
   z-index: 500;
   cursor: pointer;
-  background: rgba(110, 118, 129, 0.16);
-  backdrop-filter: saturate(0.9);
-  border: 1px solid rgba(110, 118, 129, 0.35);
+  background: rgba(110, 118, 129, 0.1);
+  border: 1px solid rgba(84, 174, 255, 0.7);
   border-radius: 6px;
-  transition: background 0.12s ease, border-color 0.12s ease;
 }
 
-.prn-overlay:hover {
-  background: rgba(110, 118, 129, 0.3);
-  border-color: rgba(84, 174, 255, 0.7);
-}
-
-body.prn-alt-active .prn-overlay:hover {
-  background: rgba(191, 135, 0, 0.28);
-  border-color: rgba(191, 135, 0, 0.75);
+body.prn-alt-active .prn-overlay {
+  background: rgba(191, 135, 0, 0.07);
+  border-color: rgba(191, 135, 0, 0.45);
 }
 
 .prn-overlay-tag {
@@ -37,16 +39,9 @@ body.prn-alt-active .prn-overlay:hover {
   font: 600 11px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   padding: 3px 8px;
   border-radius: 999px;
-  opacity: 0;
-  transform: translateY(-2px);
-  transition: opacity 0.12s ease, transform 0.12s ease;
+  opacity: 0.95;
   pointer-events: none;
   white-space: nowrap;
-}
-
-.prn-overlay:hover .prn-overlay-tag {
-  opacity: 0.95;
-  transform: translateY(0);
 }
 
 body.prn-mac .prn-overlay-tag::before {
@@ -66,7 +61,7 @@ body.prn-win.prn-alt-active .prn-overlay-tag::before {
 }
 
 body.prn-alt-active .prn-overlay-tag {
-  background: #9a6700;
+  background: #7d6a3c;
 }
 
 @keyframes prn-flash-anim {
